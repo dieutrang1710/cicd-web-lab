@@ -20,7 +20,7 @@ jobs:
         working-directory: backend
 
     env:
-      DATABASE_URL: sqlite+pysqlite:///:memory:
+      DATABASE_URL: "sqlite+pysqlite:///:memory:"
 
     steps:
       - name: Checkout source code
@@ -44,7 +44,6 @@ jobs:
             tests/test_health.py \
             tests/test_api.py
 
-
   backend-integration-test:
     name: Backend PostgreSQL Integration Test
     runs-on: ubuntu-latest
@@ -52,15 +51,12 @@ jobs:
     services:
       postgres:
         image: postgres:16-alpine
-
         env:
           POSTGRES_DB: bookstore_test
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres123
-
         ports:
           - 5432:5432
-
         options: >-
           --health-cmd="pg_isready -U postgres -d bookstore_test"
           --health-interval=5s
@@ -72,7 +68,7 @@ jobs:
         working-directory: backend
 
     env:
-      DATABASE_URL: postgresql+psycopg://postgres:postgres123@localhost:5432/bookstore_test
+      DATABASE_URL: "postgresql+psycopg://postgres:postgres123@localhost:5432/bookstore_test"
 
     steps:
       - name: Checkout source code
@@ -90,9 +86,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Run PostgreSQL integration test
+      - name: Run PostgreSQL integration tests
         run: pytest -v tests/test_database_integration.py
-
 
   frontend-build:
     name: Frontend Build
@@ -119,7 +114,6 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-
   docker-build:
     name: Docker Build
     runs-on: ubuntu-latest
@@ -136,11 +130,11 @@ jobs:
       - name: Build backend Docker image
         run: |
           docker build \
-            -t bookstore-backend:${{ github.sha }} \
+            -t "bookstore-backend:${{ github.sha }}" \
             ./backend
 
       - name: Build frontend Docker image
         run: |
           docker build \
-            -t bookstore-frontend:${{ github.sha }} \
+            -t "bookstore-frontend:${{ github.sha }}" \
             ./frontend
