@@ -7,9 +7,7 @@ from app.main import app
 
 def test_postgresql_connection() -> None:
     with SessionLocal() as database:
-        result = database.execute(
-            text("SELECT 1")
-        ).scalar_one()
+        result = database.execute(text("SELECT 1")).scalar_one()
 
     assert result == 1
 
