@@ -1,4 +1,4 @@
-name: CI Pipeline
+name: CI/CD Pipeline
 
 on:
   push:
@@ -14,8 +14,8 @@ permissions:
   contents: read
 
 jobs:
-  
-  # STAGE 1: VALIDATE
+
+  # STAGE 1: VALIDATE BACKEND
 
   backend-lint:
     name: "Stage 1 - Validate Backend"
@@ -60,6 +60,9 @@ jobs:
             -x '(^|/)(\.venv|venv|__pycache__|\.git|\.pytest_cache)/' \
             .
 
+
+  # STAGE 1: VALIDATE FRONTEND
+
   frontend-lint:
     name: "Stage 1 - Validate Frontend"
     runs-on: ubuntu-latest
@@ -93,7 +96,8 @@ jobs:
       - name: Check frontend dependencies
         run: npm ls --depth=0
 
-  # STAGE 2: TEST AND BUILD
+
+  # STAGE 2: BACKEND UNIT TEST
 
   backend-unit-test:
     name: "Stage 2 - Backend Unit Test"
@@ -136,6 +140,10 @@ jobs:
           pytest -v \
             tests/test_health.py \
             tests/test_api.py
+
+
+  # STAGE 2: BACKEND INTEGRATION TEST
+
 
   backend-integration-test:
     name: "Stage 2 - Backend PostgreSQL Integration Test"
@@ -195,6 +203,9 @@ jobs:
       - name: Run PostgreSQL integration tests
         run: pytest -v tests/test_database_integration.py
 
+
+  # STAGE 2: FRONTEND BUILD
+
   frontend-build:
     name: "Stage 2 - Frontend Build"
     runs-on: ubuntu-latest
@@ -228,7 +239,8 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-  # STAGE 3: PACKAGE
+
+  # STAGE 3: DOCKER PACKAGE
 
   docker-build:
     name: "Stage 3 - Docker Package"
@@ -261,10 +273,192 @@ jobs:
             ./frontend
 
       - name: Verify backend Docker image
-        run: docker image inspect "bookstore-backend:${{ github.sha }}"
+        run: |
+          docker image inspect \
+            "bookstore-backend:${{ github.sha }}"
 
       - name: Verify frontend Docker image
-        run: docker image inspect "bookstore-frontend:${{ github.sha }}"
+        run: |
+          docker image inspect \
+            "bookstore-frontend:${{ github.sha }}"
 
       - name: List Docker images
         run: docker image ls
+
+
+  # STAGE 4: PUBLISH IMAGES TO ACR
+  # CHỈ CHẠY KHI PUSH / MERGE VÀO MAIN
+
+
+  publish:
+    name: "Stage 4 - Publish Images"
+    runs-on: ubuntu-latest
+
+    needs:
+      - docker-build
+
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+    outputs:
+      image_tag: ${{ steps.image.outputs.tag }}
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: image
+        run: |
+          echo "tag=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push backend image
+        run: |
+          docker build \
+            --tag "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-backend:${{ steps.image.outputs.tag }}" \
+            --tag "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-backend:latest" \
+            ./backend
+
+          docker push \
+            "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-backend:${{ steps.image.outputs.tag }}"
+
+          docker push \
+            "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-backend:latest"
+
+      - name: Build and push frontend image
+        run: |
+          docker build \
+            --tag "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-frontend:${{ steps.image.outputs.tag }}" \
+            --tag "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-frontend:latest" \
+            ./frontend
+
+          docker push \
+            "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-frontend:${{ steps.image.outputs.tag }}"
+
+          docker push \
+            "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-frontend:latest"
+
+
+  # STAGE 5: DEPLOY TO AZURE VM
+
+  deploy:
+    name: "Stage 5 - Deploy to Azure VM"
+    runs-on: ubuntu-latest
+
+    needs:
+      - publish
+
+    steps:
+      - name: Checkout deployment files
+        uses: actions/checkout@v4
+
+      - name: Create production environment file
+        env:
+          ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+          IMAGE_TAG: ${{ needs.publish.outputs.image_tag }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          cat > .env.production <<EOF
+          ACR_LOGIN_SERVER=$ACR_LOGIN_SERVER
+          IMAGE_TAG=$IMAGE_TAG
+          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+          EOF
+
+      - name: Copy deployment files to VM
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          source: "docker-compose.prod.yml,.env.production"
+          target: "/home/${{ secrets.VM_USERNAME }}/bookstore-deploy"
+
+      - name: Pull and start containers
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
+            set -e
+
+            cd ~/bookstore-deploy
+
+            mv -f docker-compose.prod.yml docker-compose.yml
+
+            chmod 600 .env.production
+
+            echo "${{ secrets.ACR_PASSWORD }}" | docker login \
+              "${{ secrets.ACR_LOGIN_SERVER }}" \
+              --username "${{ secrets.ACR_USERNAME }}" \
+              --password-stdin
+
+            docker-compose \
+              --env-file .env.production \
+              pull
+
+            docker-compose \
+              --env-file .env.production \
+              up -d --remove-orphans
+
+            docker-compose \
+              --env-file .env.production \
+              ps
+
+
+  # STAGE 6: VERIFY DEPLOYMENT
+
+  verify:
+    name: "Stage 6 - Verify Deployment"
+    runs-on: ubuntu-latest
+
+    needs:
+      - deploy
+
+    steps:
+      - name: Verify application health
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
+            set -e
+
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+
+              echo "Health check attempt: $attempt"
+
+              if curl \
+                --fail \
+                --silent \
+                http://localhost:8080/api/health; then
+
+                echo
+                echo "Deployment successful."
+                exit 0
+              fi
+
+              sleep 5
+
+            done
+
+            echo "Deployment health check failed."
+
+            cd ~/bookstore-deploy
+
+            docker-compose \
+              --env-file .env.production \
+              ps
+
+            docker-compose \
+              --env-file .env.production \
+              logs --tail=100
+
+            exit 1
