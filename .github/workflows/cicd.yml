@@ -144,7 +144,6 @@ jobs:
 
   # STAGE 2: BACKEND INTEGRATION TEST
 
-
   backend-integration-test:
     name: "Stage 2 - Backend PostgreSQL Integration Test"
     runs-on: ubuntu-latest
@@ -240,10 +239,61 @@ jobs:
         run: npm run build
 
 
-  # STAGE 3: DOCKER PACKAGE
+  # STAGE 3: DEPLOY FRONTEND TO AZURE BLOB STORAGE
+  # CHỈ CHẠY KHI PUSH / MERGE VÀO MAIN
+
+  deploy-frontend-blob:
+    name: "Stage 3 - Deploy Frontend to Blob Storage"
+    runs-on: ubuntu-latest
+
+    needs:
+      - frontend-build
+
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend for production
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+        run: npm run build
+
+      - name: Check Azure CLI
+        run: az --version
+
+      - name: Upload frontend to Azure Blob Storage
+        env:
+          AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+        run: |
+          az storage blob upload-batch \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --destination '$web' \
+            --source dist \
+            --overwrite
+
+
+  # STAGE 3: DOCKER PACKAGE BACKEND
 
   docker-build:
-    name: "Stage 3 - Docker Package"
+    name: "Stage 3 - Docker Package Backend"
     runs-on: ubuntu-latest
 
     needs:
@@ -266,32 +316,20 @@ jobs:
             --tag "bookstore-backend:${{ github.sha }}" \
             ./backend
 
-      - name: Build frontend Docker image
-        run: |
-          docker build \
-            --tag "bookstore-frontend:${{ github.sha }}" \
-            ./frontend
-
       - name: Verify backend Docker image
         run: |
           docker image inspect \
             "bookstore-backend:${{ github.sha }}"
 
-      - name: Verify frontend Docker image
-        run: |
-          docker image inspect \
-            "bookstore-frontend:${{ github.sha }}"
-
       - name: List Docker images
         run: docker image ls
 
 
-  # STAGE 4: PUBLISH IMAGES TO ACR
+  # STAGE 4: PUBLISH BACKEND IMAGE TO ACR
   # CHỈ CHẠY KHI PUSH / MERGE VÀO MAIN
 
-
   publish:
-    name: "Stage 4 - Publish Images"
+    name: "Stage 4 - Publish Backend Image"
     runs-on: ubuntu-latest
 
     needs:
@@ -331,24 +369,11 @@ jobs:
           docker push \
             "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-backend:latest"
 
-      - name: Build and push frontend image
-        run: |
-          docker build \
-            --tag "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-frontend:${{ steps.image.outputs.tag }}" \
-            --tag "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-frontend:latest" \
-            ./frontend
 
-          docker push \
-            "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-frontend:${{ steps.image.outputs.tag }}"
-
-          docker push \
-            "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-frontend:latest"
-
-
-  # STAGE 5: DEPLOY TO AZURE VM
+  # STAGE 5: DEPLOY BACKEND TO AZURE VM
 
   deploy:
-    name: "Stage 5 - Deploy to Azure VM"
+    name: "Stage 5 - Deploy Backend to Azure VM"
     runs-on: ubuntu-latest
 
     needs:
@@ -412,10 +437,10 @@ jobs:
               ps
 
 
-  # STAGE 6: VERIFY DEPLOYMENT
+  # STAGE 6: VERIFY BACKEND DEPLOYMENT
 
   verify:
-    name: "Stage 6 - Verify Deployment"
+    name: "Stage 6 - Verify Backend Deployment"
     runs-on: ubuntu-latest
 
     needs:
