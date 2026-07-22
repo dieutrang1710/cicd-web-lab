@@ -15,7 +15,9 @@ permissions:
 
 jobs:
 
+  # =========================================================
   # STAGE 1: VALIDATE BACKEND
+  # =========================================================
 
   backend-lint:
     name: "Stage 1 - Validate Backend"
@@ -61,7 +63,9 @@ jobs:
             .
 
 
+  # =========================================================
   # STAGE 1: VALIDATE FRONTEND
+  # =========================================================
 
   frontend-lint:
     name: "Stage 1 - Validate Frontend"
@@ -97,7 +101,9 @@ jobs:
         run: npm ls --depth=0
 
 
+  # =========================================================
   # STAGE 2: BACKEND UNIT TEST
+  # =========================================================
 
   backend-unit-test:
     name: "Stage 2 - Backend Unit Test"
@@ -142,7 +148,9 @@ jobs:
             tests/test_api.py
 
 
+  # =========================================================
   # STAGE 2: BACKEND INTEGRATION TEST
+  # =========================================================
 
   backend-integration-test:
     name: "Stage 2 - Backend PostgreSQL Integration Test"
@@ -203,7 +211,9 @@ jobs:
         run: pytest -v tests/test_database_integration.py
 
 
-  # STAGE 2: FRONTEND BUILD CHECK
+  # =========================================================
+  # STAGE 2: FRONTEND BUILD
+  # =========================================================
 
   frontend-build:
     name: "Stage 2 - Frontend Build"
@@ -239,8 +249,10 @@ jobs:
         run: npm run build
 
 
+  # =========================================================
   # STAGE 3: DEPLOY FRONTEND TO AZURE BLOB STORAGE
   # ONLY PUSH / MERGE TO MAIN
+  # =========================================================
 
   deploy-frontend-blob:
     name: "Stage 3 - Deploy Frontend to Blob Storage"
@@ -272,9 +284,7 @@ jobs:
       - name: Build frontend for production
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
-        run: |
-          echo "Building frontend with configured production API URL"
-          npm run build
+        run: npm run build
 
       - name: Verify frontend build output
         run: |
@@ -298,19 +308,10 @@ jobs:
             --source dist \
             --overwrite
 
-      - name: Verify uploaded frontend files
-        env:
-          AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
-          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
-        run: |
-          az storage blob list \
-            --account-name "$AZURE_STORAGE_ACCOUNT" \
-            --account-key "$AZURE_STORAGE_KEY" \
-            --container-name '$web' \
-            --output table
 
-
+  # =========================================================
   # STAGE 3: DOCKER PACKAGE BACKEND
+  # =========================================================
 
   docker-build:
     name: "Stage 3 - Docker Package Backend"
@@ -345,8 +346,10 @@ jobs:
         run: docker image ls
 
 
+  # =========================================================
   # STAGE 4: PUBLISH BACKEND IMAGE TO ACR
   # ONLY PUSH / MERGE TO MAIN
+  # =========================================================
 
   publish:
     name: "Stage 4 - Publish Backend Image"
@@ -390,7 +393,9 @@ jobs:
             "${{ secrets.ACR_LOGIN_SERVER }}/bookstore-backend:latest"
 
 
+  # =========================================================
   # STAGE 5: DEPLOY BACKEND TO AZURE VM
+  # =========================================================
 
   deploy:
     name: "Stage 5 - Deploy Backend to Azure VM"
@@ -436,6 +441,7 @@ jobs:
             cd ~/bookstore-deploy
 
             mv -f docker-compose.prod.yml docker-compose.yml
+
             chmod 600 .env.production
 
             echo "${{ secrets.ACR_PASSWORD }}" | docker login \
@@ -456,17 +462,19 @@ jobs:
               ps
 
 
-  # STAGE 6: VERIFY BACKEND DEPLOYMENT
+  # =========================================================
+  # STAGE 6: VERIFY BACKEND CONTAINER
+  # =========================================================
 
   verify:
-    name: "Stage 6 - Verify Backend Deployment"
+    name: "Stage 6 - Verify Backend Container"
     runs-on: ubuntu-latest
 
     needs:
       - deploy
 
     steps:
-      - name: Verify backend through Nginx
+      - name: Verify backend container health
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VM_HOST }}
@@ -476,48 +484,48 @@ jobs:
             set -e
 
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
-              echo "Health check attempt: $attempt"
+              echo "Backend health check attempt: $attempt"
 
               if curl \
                 --fail \
                 --silent \
-                http://localhost/api/health; then
+                --show-error \
+                http://127.0.0.1:8000/api/health; then
 
                 echo
-                echo "Backend deployment successful."
+                echo "Backend container is healthy."
                 exit 0
               fi
 
               sleep 5
             done
 
-            echo "Backend deployment health check failed."
-
-            echo "Nginx status:"
-            sudo systemctl status nginx --no-pager || true
-
-            echo "Nginx configuration test:"
-            sudo nginx -t || true
-
-            echo "Listening ports:"
-            sudo ss -tlnp || true
+            echo "Backend container health check failed."
 
             cd ~/bookstore-deploy
 
             echo "Container status:"
+
             docker-compose \
               --env-file .env.production \
               ps
 
             echo "Container logs:"
+
             docker-compose \
               --env-file .env.production \
               logs --tail=100
 
+            echo "Listening ports:"
+
+            sudo ss -tlnp || true
+
             exit 1
 
 
-  # STAGE 7: VERIFY PUBLIC HTTPS BACKEND
+  # =========================================================
+  # STAGE 7: VERIFY PUBLIC HTTPS
+  # =========================================================
 
   verify-public-https:
     name: "Stage 7 - Verify Public HTTPS Backend"
@@ -530,7 +538,7 @@ jobs:
       - name: Verify public HTTPS endpoint
         run: |
           for attempt in 1 2 3 4 5; do
-            echo "Public HTTPS check attempt: $attempt"
+            echo "Public HTTPS health check attempt: $attempt"
 
             if curl \
               --fail \
