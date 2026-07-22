@@ -203,7 +203,7 @@ jobs:
         run: pytest -v tests/test_database_integration.py
 
 
-  # STAGE 2: FRONTEND BUILD
+  # STAGE 2: FRONTEND BUILD CHECK
 
   frontend-build:
     name: "Stage 2 - Frontend Build"
@@ -240,7 +240,7 @@ jobs:
 
 
   # STAGE 3: DEPLOY FRONTEND TO AZURE BLOB STORAGE
-  # CHỈ CHẠY KHI PUSH / MERGE VÀO MAIN
+  # ONLY PUSH / MERGE TO MAIN
 
   deploy-frontend-blob:
     name: "Stage 3 - Deploy Frontend to Blob Storage"
@@ -272,7 +272,16 @@ jobs:
       - name: Build frontend for production
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
-        run: npm run build
+        run: |
+          echo "Building frontend with configured production API URL"
+          npm run build
+
+      - name: Verify frontend build output
+        run: |
+          test -f dist/index.html
+          test -d dist/assets
+          ls -la dist
+          ls -la dist/assets
 
       - name: Check Azure CLI
         run: az --version
@@ -288,6 +297,17 @@ jobs:
             --destination '$web' \
             --source dist \
             --overwrite
+
+      - name: Verify uploaded frontend files
+        env:
+          AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+        run: |
+          az storage blob list \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --container-name '$web' \
+            --output table
 
 
   # STAGE 3: DOCKER PACKAGE BACKEND
@@ -326,7 +346,7 @@ jobs:
 
 
   # STAGE 4: PUBLISH BACKEND IMAGE TO ACR
-  # CHỈ CHẠY KHI PUSH / MERGE VÀO MAIN
+  # ONLY PUSH / MERGE TO MAIN
 
   publish:
     name: "Stage 4 - Publish Backend Image"
@@ -404,7 +424,7 @@ jobs:
           source: "docker-compose.prod.yml,.env.production"
           target: "/home/${{ secrets.VM_USERNAME }}/bookstore-deploy"
 
-      - name: Pull and start containers
+      - name: Pull and start backend containers
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VM_HOST }}
@@ -416,7 +436,6 @@ jobs:
             cd ~/bookstore-deploy
 
             mv -f docker-compose.prod.yml docker-compose.yml
-
             chmod 600 .env.production
 
             echo "${{ secrets.ACR_PASSWORD }}" | docker login \
@@ -447,7 +466,7 @@ jobs:
       - deploy
 
     steps:
-      - name: Verify application health
+      - name: Verify backend through Nginx
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VM_HOST }}
@@ -457,33 +476,75 @@ jobs:
             set -e
 
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
-
               echo "Health check attempt: $attempt"
 
               if curl \
                 --fail \
                 --silent \
-                http://localhost:8080/api/health; then
+                http://localhost/api/health; then
 
                 echo
-                echo "Deployment successful."
+                echo "Backend deployment successful."
                 exit 0
               fi
 
               sleep 5
-
             done
 
-            echo "Deployment health check failed."
+            echo "Backend deployment health check failed."
+
+            echo "Nginx status:"
+            sudo systemctl status nginx --no-pager || true
+
+            echo "Nginx configuration test:"
+            sudo nginx -t || true
+
+            echo "Listening ports:"
+            sudo ss -tlnp || true
 
             cd ~/bookstore-deploy
 
+            echo "Container status:"
             docker-compose \
               --env-file .env.production \
               ps
 
+            echo "Container logs:"
             docker-compose \
               --env-file .env.production \
               logs --tail=100
 
             exit 1
+
+
+  # STAGE 7: VERIFY PUBLIC HTTPS BACKEND
+
+  verify-public-https:
+    name: "Stage 7 - Verify Public HTTPS Backend"
+    runs-on: ubuntu-latest
+
+    needs:
+      - verify
+
+    steps:
+      - name: Verify public HTTPS endpoint
+        run: |
+          for attempt in 1 2 3 4 5; do
+            echo "Public HTTPS check attempt: $attempt"
+
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              https://ecotrack1710.duckdns.org/api/health; then
+
+              echo
+              echo "Public HTTPS backend is healthy."
+              exit 0
+            fi
+
+            sleep 5
+          done
+
+          echo "Public HTTPS backend health check failed."
+          exit 1
