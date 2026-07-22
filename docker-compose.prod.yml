@@ -30,20 +30,8 @@ services:
       database:
         condition: service_healthy
 
-    expose:
-      - "8000"
-
-    restart: unless-stopped
-
-  frontend:
-    image: "${ACR_LOGIN_SERVER}/bookstore-frontend:${IMAGE_TAG}"
-    container_name: bookstore-frontend
-
-    depends_on:
-      - backend
-
     ports:
-      - "8080:80"
+      - "127.0.0.1:8000:8000"
 
     restart: unless-stopped
 
